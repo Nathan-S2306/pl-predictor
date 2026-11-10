@@ -16,6 +16,8 @@ import charts
 import model as M
 
 DATA = Path(__file__).parent / "data"
+# Changes whenever model.py is edited, so cached models and simulations are rebuilt after an update.
+CODE_VERSION = Path(M.__file__).stat().st_mtime
 LIVE_URL = "https://www.football-data.co.uk/mmz4281/{code}/E0.csv"
 
 st.set_page_config(page_title="Premier League predictor", page_icon="⚽", layout="wide")
@@ -70,7 +72,7 @@ def get_results(use_live: bool, uploaded) -> tuple[pd.DataFrame, str]:
 
 
 @st.cache_resource(show_spinner=False)
-def fit_model(results: pd.DataFrame, half_life: float, prior_sd: float, promoted: float) -> M.GoalsModel:
+def fit_model(results: pd.DataFrame, half_life: float, prior_sd: float, promoted: float, code_version: float) -> M.GoalsModel:
     return M.fit(results, half_life_days=half_life, prior_sd=prior_sd, promoted_offset=promoted)
 
 
@@ -115,7 +117,7 @@ with st.sidebar:
 results, source = get_results(use_live, uploaded)
 season = M.current_season(results)
 current = results[results["Season"] == season]
-gm = fit_model(results, float(half_life), float(prior_sd), float(promoted))
+gm = fit_model(results, float(half_life), float(prior_sd), float(promoted), CODE_VERSION)
 fixtures = M.remaining_fixtures(results, load_schedule())
 teams = sorted(set(current["HomeTeam"]) | set(current["AwayTeam"]))
 
@@ -214,7 +216,7 @@ with tab_next:
 # ------------------------------------------------------------- simulation ----
 
 with tab_table:
-    sim_key = (len(results), str(results["Date"].max()), half_life, prior_sd, promoted, source)
+    sim_key = (len(results), str(results["Date"].max()), half_life, prior_sd, promoted, source, CODE_VERSION)
     sim = run_simulation(gm, results, fixtures, int(n_sims), int(seed), bool(uncertainty), int(top_n), sim_key)
     s = sim.summary
     top_col = f"Top {top_n}"
