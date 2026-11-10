@@ -78,8 +78,12 @@ def current_season(results: pd.DataFrame) -> str:
     return results.loc[results["Date"].idxmax(), "Season"]
 
 
-def league_table(results: pd.DataFrame, teams: list[str] | None = None) -> pd.DataFrame:
-    """Standard league table (3 points a win; sorted by points, GD, goals for)."""
+def league_table(results: pd.DataFrame, teams: list[str] | None = None,
+                 points_adjust: dict[str, int] | None = None) -> pd.DataFrame:
+    """Standard league table (3 points a win; sorted by points, GD, goals for).
+
+    points_adjust maps team -> points to add (negative for a deduction).
+    """
     teams = teams or sorted(set(results["HomeTeam"]) | set(results["AwayTeam"]))
     idx = {t: i for i, t in enumerate(teams)}
     tab = np.zeros((len(teams), 6), dtype=int)  # P W D L GF GA
@@ -93,6 +97,9 @@ def league_table(results: pd.DataFrame, teams: list[str] | None = None) -> pd.Da
     out = pd.DataFrame(tab, index=teams, columns=["P", "W", "D", "L", "GF", "GA"])
     out["GD"] = out["GF"] - out["GA"]
     out["Pts"] = 3 * out["W"] + out["D"]
+    for t, adj in (points_adjust or {}).items():
+        if t in out.index:
+            out.loc[t, "Pts"] += int(adj)
     out = out.sort_values(["Pts", "GD", "GF"], ascending=False, kind="stable")
     out.insert(0, "Pos", range(1, len(out) + 1))
     out.index.name = "Team"
@@ -136,6 +143,7 @@ class GoalsModel:
     fitted_on: int = 0
     last_date: pd.Timestamp | None = None
     promoted: list[str] = field(default_factory=list)
+    relegated: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self._idx = {t: i for i, t in enumerate(self.teams)}
@@ -215,13 +223,16 @@ def score_matrix(lam: float, mu: float, rho: float = 0.0, max_goals: int = MAX_G
 
 
 def fit(results: pd.DataFrame, half_life_days: float = 365.0, prior_sd: float = 0.30,
-        promoted_offset: float = 0.20, as_of: pd.Timestamp | None = None) -> GoalsModel:
+        promoted_offset: float = 0.20, as_of: pd.Timestamp | None = None,
+        relegated: tuple[str, ...] = ()) -> GoalsModel:
     """Fit the goals model.
 
     half_life_days   a match this many days old counts half as much as one today
     prior_sd         prior spread of attack/defence ratings (log scale); smaller = more shrinkage
     promoted_offset  teams with no matches before the current season start this far
                      below average in both attack and defence (log scale) until results say otherwise
+    relegated        new teams that came down from the division above; they start the same
+                     distance *above* average instead
     """
     res = results.sort_values("Date")
     as_of = pd.Timestamp(as_of) if as_of is not None else res["Date"].max()
@@ -256,9 +267,11 @@ def fit(results: pd.DataFrame, half_life_days: float = 365.0, prior_sd: float = 
     promoted = sorted(set(cur["HomeTeam"]) | set(cur["AwayTeam"])) if len(earlier) else []
     promoted = [t for t in promoted if t not in old_teams]
     prior_mean = np.zeros(p)
-    for t in promoted:
-        prior_mean[2 + idx[t]] = -promoted_offset
-        prior_mean[2 + n + idx[t]] = -promoted_offset
+    came_down = [t for t in promoted if t in set(relegated)]
+    promoted = [t for t in promoted if t not in set(relegated)]
+    for t, sign in [(t, -1.0) for t in promoted] + [(t, 1.0) for t in came_down]:
+        prior_mean[2 + idx[t]] = sign * promoted_offset
+        prior_mean[2 + n + idx[t]] = sign * promoted_offset
     pen = np.zeros(p)
     pen[2:] = 1.0 / prior_sd ** 2
 
@@ -290,7 +303,7 @@ def fit(results: pd.DataFrame, half_life_days: float = 365.0, prior_sd: float = 
 
     return GoalsModel(teams=teams, intercept=float(beta[0]), home_adv=float(beta[1]),
                       attack=beta[2:2 + n].copy(), defence=beta[2 + n:].copy(), rho=rho, cov=cov,
-                      fitted_on=m, last_date=as_of, promoted=promoted)
+                      fitted_on=m, last_date=as_of, promoted=promoted, relegated=came_down)
 
 
 # ---------------------------------------------------------- simulation ----
@@ -321,12 +334,17 @@ class SimulationResult:
 
 def simulate_season(model: GoalsModel, results: pd.DataFrame, fixtures: pd.DataFrame | None = None,
                     n_sims: int = 10_000, seed: int | None = 42, rating_uncertainty: bool = True,
-                    top_n: int = 4, relegated: int = 3, chunk: int = 2_000) -> SimulationResult:
+                    zones: dict[str, tuple[int, int]] | None = None,
+                    points_adjust: dict[str, int] | None = None, chunk: int = 2_000) -> SimulationResult:
     """Monte Carlo simulation of the rest of the current season.
 
     Each run plays every remaining fixture once, adds the points to the real
     table so far, and ranks teams by points, goal difference, then goals scored
     (remaining ties broken at random).
+
+    zones          named ranges of final positions to report a probability for,
+                   e.g. {"Top 4": (1, 4), "Relegation": (18, 20)} (1-based, inclusive)
+    points_adjust  team -> points to add to the current table (negative for a deduction)
     """
     season = current_season(results)
     cur = results[results["Season"] == season]
@@ -334,7 +352,9 @@ def simulate_season(model: GoalsModel, results: pd.DataFrame, fixtures: pd.DataF
     n = len(teams)
     if fixtures is None:
         fixtures = remaining_fixtures(results)
-    now = league_table(cur, teams).loc[teams]
+    now = league_table(cur, teams, points_adjust).loc[teams]
+    if zones is None:
+        zones = {"Top 4": (1, 4), "Relegation": (n - 2, n)}
     base_pts = now["Pts"].to_numpy(float)
     base_gd = now["GD"].to_numpy(float)
     base_gf = now["GF"].to_numpy(float)
@@ -417,8 +437,7 @@ def simulate_season(model: GoalsModel, results: pd.DataFrame, fixtures: pd.DataF
         "Exp GA": ga_sum / n_sims,
         "Avg pos": probs @ np.arange(1, n + 1),
         "Title": probs[:, 0],
-        f"Top {top_n}": probs[:, :top_n].sum(1),
-        "Relegation": probs[:, n - relegated:].sum(1) if relegated else np.zeros(n),
+        **{name: probs[:, lo - 1:hi].sum(1) for name, (lo, hi) in zones.items()},
     }).sort_values(["Exp pts", "Title"], ascending=False).reset_index(drop=True)
     summary.insert(0, "Pos", range(1, n + 1))
     position_probs = position_probs.loc[summary["Team"]]

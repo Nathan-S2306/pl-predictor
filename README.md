@@ -1,7 +1,8 @@
-# Premier League predictor
+# English football predictor
 
-A Streamlit app that predicts Premier League matches (goals and results) and
-simulates the rest of the season to project the final table.
+A Streamlit app that predicts matches (goals and results) in the Premier League,
+Championship, League One and League Two, and simulates the rest of the season to
+project each final table. Pick the league in the sidebar.
 
 ## What it does
 
@@ -33,6 +34,30 @@ and start it with
 ```bash
 streamlit run app.py --server.port $PORT --server.address 0.0.0.0
 ```
+
+## Leagues
+
+| League | Reported chances |
+|---|---|
+| Premier League | title, top N (4 to 7), relegation (bottom 3) |
+| Championship | title, automatic promotion (top 2), play-offs (3rd to 8th), relegation (bottom 3) |
+| League One | title, automatic promotion (top 2), play-offs (3rd to 6th), relegation (bottom 4) |
+| League Two | title, automatic promotion (top 3), play-offs (4th to 7th), relegation (bottom 2) |
+
+These are set in `LEAGUES` at the top of `app.py`; change the numbers there if
+the rules change. Play-off winners are not simulated: the app gives the chance
+of finishing in the play-off places.
+
+Only the Premier League has bundled results. The other three leagues are
+downloaded from football-data.co.uk when selected, so they need that download
+to work (or a CSV uploaded in the sidebar).
+
+Teams new to a division start below average if promoted and above average if
+they came down from the division above.
+
+`data/adjustments.csv` holds points deductions (League, Team, Points, Note).
+They are applied to the current table and the simulation. Team names must match
+the results data.
 
 ## Data
 

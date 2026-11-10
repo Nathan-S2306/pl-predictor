@@ -1,4 +1,4 @@
-"""Premier League match predictor and season simulator.
+"""English football match predictor and season simulator (Premier League to League Two).
 
 Run locally:  streamlit run app.py
 """
@@ -18,15 +18,26 @@ import model as M
 DATA = Path(__file__).parent / "data"
 # Changes whenever model.py is edited, so cached models and simulations are rebuilt after an update.
 CODE_VERSION = Path(M.__file__).stat().st_mtime
-LIVE_URL = "https://www.football-data.co.uk/mmz4281/{code}/E0.csv"
+LIVE_URL = "https://www.football-data.co.uk/mmz4281/{season}/{code}.csv"
 
-st.set_page_config(page_title="Premier League predictor", page_icon="⚽", layout="wide")
+# Top to bottom of the pyramid. `zones` are the final-position ranges the simulation reports
+# (1-based, inclusive; negative numbers count up from the bottom, so (-3, -1) is the bottom three).
+LEAGUES = {
+    "Premier League": {"code": "E0", "zones": {"Relegation": (-3, -1)}},
+    "Championship": {"code": "E1", "zones": {"Auto promotion": (1, 2), "Play-offs": (3, 8), "Relegation": (-3, -1)}},
+    "League One": {"code": "E2", "zones": {"Auto promotion": (1, 2), "Play-offs": (3, 6), "Relegation": (-4, -1)}},
+    "League Two": {"code": "E3", "zones": {"Auto promotion": (1, 3), "Play-offs": (4, 7), "Relegation": (-2, -1)}},
+}
+LEAGUE_NAMES = list(LEAGUES)
+
+st.set_page_config(page_title="English football predictor", page_icon="⚽", layout="wide")
 
 
 # ------------------------------------------------------------------ data ----
 
 @st.cache_data
 def load_bundled() -> pd.DataFrame:
+    """Premier League results shipped with the app (used if the live download fails)."""
     return M.clean_results(pd.read_csv(DATA / "results.csv"))
 
 
@@ -38,22 +49,56 @@ def load_schedule() -> pd.DataFrame:
     return pd.read_csv(path, parse_dates=["Date"])
 
 
+@st.cache_data
+def load_adjustments(league: str) -> dict[str, int]:
+    """Points deductions (or awards) from data/adjustments.csv: League, Team, Points, Note."""
+    path = DATA / "adjustments.csv"
+    if not path.exists():
+        return {}
+    adj = pd.read_csv(path)
+    adj = adj[adj["League"].str.strip() == league]
+    return {str(t).strip(): int(p) for t, p in zip(adj["Team"], adj["Points"])}
+
+
 @st.cache_data(ttl=6 * 3600, show_spinner="Checking for new results…")
-def load_live(today: dt.date) -> pd.DataFrame:
-    """Last season and this season from football-data.co.uk (refreshed every 6 hours)."""
-    start = today.year if today.month >= 7 else today.year - 1
-    frames = []
-    for y in (start - 1, start):
-        code = f"{y % 100:02d}{(y + 1) % 100:02d}"
-        raw = pd.read_csv(LIVE_URL.format(code=code), encoding="latin-1", on_bad_lines="skip")
-        frame = M.clean_results(raw.drop(columns=[c for c in raw.columns if c == "Season"]))
-        frame["Season"] = f"{y}-{(y + 1) % 100:02d}"
-        frames.append(frame)
-    return pd.concat(frames, ignore_index=True)
+def load_division(code: str, start_year: int) -> pd.DataFrame:
+    """One division-season from football-data.co.uk (refreshed every 6 hours)."""
+    season = f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
+    raw = pd.read_csv(LIVE_URL.format(season=season, code=code), encoding="latin-1", on_bad_lines="skip")
+    frame = M.clean_results(raw.drop(columns=[c for c in raw.columns if c == "Season"]))
+    frame["Season"] = f"{start_year}-{(start_year + 1) % 100:02d}"
+    return frame
 
 
-def get_results(use_live: bool, uploaded) -> tuple[pd.DataFrame, str]:
-    bundled = load_bundled()
+def season_start(today: dt.date) -> int:
+    return today.year if today.month >= 7 else today.year - 1
+
+
+def load_live(league: str) -> pd.DataFrame:
+    """Last season and this season for one league."""
+    y = season_start(dt.date.today())
+    code = LEAGUES[league]["code"]
+    return pd.concat([load_division(code, y - 1), load_division(code, y)], ignore_index=True)
+
+
+def came_down(league: str, results: pd.DataFrame) -> tuple[str, ...]:
+    """Teams new to this league that played in the division above last season."""
+    i = LEAGUE_NAMES.index(league)
+    if i == 0:
+        return ()
+    try:
+        above = load_division(LEAGUES[LEAGUE_NAMES[i - 1]]["code"], season_start(dt.date.today()) - 1)
+    except Exception:
+        return ()
+    season = M.current_season(results)
+    now = results[results["Season"] == season]
+    before = results[results["Season"] != season]
+    new = (set(now["HomeTeam"]) | set(now["AwayTeam"])) - (set(before["HomeTeam"]) | set(before["AwayTeam"]))
+    return tuple(sorted(new & (set(above["HomeTeam"]) | set(above["AwayTeam"]))))
+
+
+def get_results(league: str, use_live: bool, uploaded) -> tuple[pd.DataFrame | None, str]:
+    bundled = load_bundled() if league == "Premier League" else None
     if uploaded is not None:
         try:
             return M.clean_results(pd.read_csv(uploaded)), "your uploaded file"
@@ -61,26 +106,30 @@ def get_results(use_live: bool, uploaded) -> tuple[pd.DataFrame, str]:
             st.sidebar.error(f"Could not read the upload: {exc}")
     if use_live:
         try:
-            live = load_live(dt.date.today())
+            live = load_live(league)
+            if bundled is None:
+                return live, "football-data.co.uk (live)"
             season = M.current_season(bundled)
             if (live["Season"] == season).sum() >= (bundled["Season"] == season).sum():
                 return live, "football-data.co.uk (live)"
             st.sidebar.info("Live data is behind the bundled results, so the bundled file is used.")
         except Exception:
-            st.sidebar.info("Live results could not be loaded, so the bundled file is used.")
+            if bundled is not None:
+                st.sidebar.info("Live results could not be loaded, so the bundled file is used.")
     return bundled, "bundled results file"
 
 
 @st.cache_resource(show_spinner=False)
-def fit_model(results: pd.DataFrame, half_life: float, prior_sd: float, promoted: float, code_version: float) -> M.GoalsModel:
-    return M.fit(results, half_life_days=half_life, prior_sd=prior_sd, promoted_offset=promoted)
+def fit_model(results: pd.DataFrame, half_life: float, prior_sd: float, promoted: float,
+              relegated: tuple[str, ...], code_version: float) -> M.GoalsModel:
+    return M.fit(results, half_life_days=half_life, prior_sd=prior_sd, promoted_offset=promoted, relegated=relegated)
 
 
 @st.cache_resource(show_spinner="Simulating the rest of the season…")
 def run_simulation(_model: M.GoalsModel, results: pd.DataFrame, fixtures: pd.DataFrame, n_sims: int,
-                   seed: int, uncertainty: bool, top_n: int, key: tuple) -> M.SimulationResult:
+                   seed: int, uncertainty: bool, zones: dict, adjust: dict, key: tuple) -> M.SimulationResult:
     return M.simulate_season(_model, results, fixtures, n_sims=n_sims, seed=seed,
-                             rating_uncertainty=uncertainty, top_n=top_n)
+                             rating_uncertainty=uncertainty, zones=zones, points_adjust=adjust)
 
 
 def pct(x: float) -> str:
@@ -95,34 +144,47 @@ def show(fig) -> None:
 # --------------------------------------------------------------- sidebar ----
 
 with st.sidebar:
+    league = st.selectbox("League", LEAGUE_NAMES, index=0)
     st.header("Data")
     use_live = st.toggle("Fetch latest results automatically", value=True,
                          help="Pulls results from football-data.co.uk. Falls back to the bundled file if that fails.")
     uploaded = st.file_uploader("Or upload results (CSV)", type="csv",
-                                help="Columns: Date, HomeTeam, AwayTeam, FTHG, FTAG. A football-data.co.uk file works as is.")
+                                help="Results for the selected league. Columns: Date, HomeTeam, AwayTeam, FTHG, FTAG. "
+                                     "A football-data.co.uk file works as is.")
     st.header("Model")
     half_life = st.slider("Form half-life (days)", 60, 730, 365, step=5,
                           help="A match this old counts half as much as one played today.")
     prior_sd = st.slider("Rating spread", 0.10, 0.60, 0.30, step=0.05,
                          help="Lower values pull every team towards league average; higher values trust results more.")
-    promoted = st.slider("Promoted-team handicap", 0.0, 0.5, 0.20, step=0.05,
-                         help="How far below average newly promoted teams start, before their results are counted.")
+    promoted = st.slider("New-team adjustment", 0.0, 0.5, 0.20, step=0.05,
+                         help="Teams new to the division have no history in it. Promoted teams start this far below "
+                              "average and relegated teams this far above, before their results are counted.")
     st.header("Simulation")
     n_sims = st.select_slider("Simulated seasons", options=[1_000, 5_000, 10_000, 20_000, 50_000], value=10_000)
     uncertainty = st.toggle("Allow for rating uncertainty", value=True,
                             help="Each simulated season draws slightly different team ratings, which widens the range of outcomes.")
-    top_n = st.selectbox("European places (top N)", [4, 5, 6, 7], index=0)
+    top_n = st.selectbox("European places (top N)", [4, 5, 6, 7], index=0) if league == "Premier League" else 0
     seed = st.number_input("Random seed", value=42, step=1)
 
-results, source = get_results(use_live, uploaded)
+results, source = get_results(league, use_live, uploaded)
+st.title("English football predictor")
+if results is None:
+    st.error(f"{league} results could not be downloaded from football-data.co.uk. Try again shortly, or upload a "
+             f"results CSV for this league in the sidebar (file {LEAGUES[league]['code']}.csv from football-data.co.uk).")
+    st.stop()
 season = M.current_season(results)
 current = results[results["Season"] == season]
-gm = fit_model(results, float(half_life), float(prior_sd), float(promoted), CODE_VERSION)
+relegated_in = came_down(league, results) if source.startswith("football-data") else ()
+gm = fit_model(results, float(half_life), float(prior_sd), float(promoted), relegated_in, CODE_VERSION)
 fixtures = M.remaining_fixtures(results, load_schedule())
 teams = sorted(set(current["HomeTeam"]) | set(current["AwayTeam"]))
+adjust = {t: p for t, p in load_adjustments(league).items() if t in teams}
+n_teams = len(teams)
+zones = ({f"Top {top_n}": (1, int(top_n))} if top_n else {}) | {
+    name: (lo if lo > 0 else n_teams + 1 + lo, hi if hi > 0 else n_teams + 1 + hi)
+    for name, (lo, hi) in LEAGUES[league]["zones"].items()}
 
-st.title("Premier League predictor")
-st.caption(f"{season} season · {len(current)} matches played, {len(fixtures)} to go · "
+st.caption(f"{league} · {season} season · {len(current)} matches played, {len(fixtures)} to go · "
            f"results to {results['Date'].max():%d %b %Y} from {source}")
 
 tab_match, tab_next, tab_table, tab_ratings, tab_data = st.tabs(
@@ -216,10 +278,10 @@ with tab_next:
 # ------------------------------------------------------------- simulation ----
 
 with tab_table:
-    sim_key = (len(results), str(results["Date"].max()), half_life, prior_sd, promoted, source, CODE_VERSION)
-    sim = run_simulation(gm, results, fixtures, int(n_sims), int(seed), bool(uncertainty), int(top_n), sim_key)
+    sim_key = (league, len(results), str(results["Date"].max()), half_life, prior_sd, promoted, source, CODE_VERSION)
+    sim = run_simulation(gm, results, fixtures, int(n_sims), int(seed), bool(uncertainty), zones, adjust, sim_key)
     s = sim.summary
-    top_col = f"Top {top_n}"
+    chance_cols = ["Title", *zones]
     leader = s.iloc[0]
     k1, k2, k3 = st.columns(3)
     k1.metric("Title favourite", leader["Team"], pct(s["Title"].max()), delta_color="off")
@@ -227,11 +289,11 @@ with tab_table:
     k3.metric("Simulated seasons", f"{sim.n_sims:,}")
 
     st.subheader("Projected final table")
-    view = s[["Pos", "Team", "Played", "Pts now", "Exp pts", "Exp GF", "Exp GA", "Pts low", "Pts high", "Title", top_col, "Relegation"]].copy()
+    view = s[["Pos", "Team", "Played", "Pts now", "Exp pts", "Exp GF", "Exp GA", "Pts low", "Pts high", *chance_cols]].copy()
     view["Range"] = view["Pts low"].round().astype(int).astype(str) + "–" + view["Pts high"].round().astype(int).astype(str)
-    for c in ("Title", top_col, "Relegation"):
+    for c in chance_cols:
         view[c] = view[c] * 100
-    view = view[["Pos", "Team", "Played", "Pts now", "Exp pts", "Range", "Exp GF", "Exp GA", "Title", top_col, "Relegation"]]
+    view = view[["Pos", "Team", "Played", "Pts now", "Exp pts", "Range", "Exp GF", "Exp GA", *chance_cols]]
     st.dataframe(view, hide_index=True, height=38 * (len(view) + 1),
                  column_config={
                      "Exp pts": st.column_config.NumberColumn("Projected pts", format="%.1f"),
@@ -239,7 +301,9 @@ with tab_table:
                      "Exp GA": st.column_config.NumberColumn("Projected GA", format="%.0f", help="Average goals conceded over the full season."),
                      "Range": st.column_config.TextColumn("90% range", help="Nine simulations in ten finish inside this points range."),
                      **{c: st.column_config.ProgressColumn(c, format="%.1f%%", min_value=0, max_value=100)
-                        for c in ("Title", top_col, "Relegation")}})
+                        for c in chance_cols}})
+    if adjust:
+        st.caption("Points adjustments applied: " + ", ".join(f"{t} {p:+d}" for t, p in adjust.items()) + ".")
 
     st.subheader("Chance of each finishing position")
     show(charts.position_heatmap(sim.position_probs))
@@ -267,12 +331,14 @@ with tab_ratings:
     c.metric("Low-score adjustment (rho)", f"{gm.rho:+.3f}")
     if gm.promoted:
         st.caption("Treated as newly promoted: " + ", ".join(gm.promoted) + ".")
+    if gm.relegated:
+        st.caption("Treated as relegated from the division above: " + ", ".join(gm.relegated) + ".")
 
 # ------------------------------------------------------------------- data ----
 
 with tab_data:
     st.subheader(f"{season} table")
-    st.dataframe(M.league_table(current).reset_index(), hide_index=True, height=38 * (len(teams) + 1))
+    st.dataframe(M.league_table(current, points_adjust=adjust).reset_index(), hide_index=True, height=38 * (len(teams) + 1))
     st.subheader("Results used by the model")
     shown = results.sort_values("Date", ascending=False).copy()
     shown["Date"] = shown["Date"].dt.strftime("%Y-%m-%d")
