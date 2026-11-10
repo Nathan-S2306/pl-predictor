@@ -166,25 +166,25 @@ CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap');
 .stApp, .stApp p, .stApp label, .stApp li, .stApp h1, .stApp h2, .stApp h3, .stApp button, .stApp input,
 .stApp [data-baseweb="select"] div, .pp { font-family: 'Archivo', system-ui, sans-serif; }
-.block-container { padding-top: 2.6rem; max-width: 820px; }
+.block-container { padding-top: 4.4rem; max-width: 820px; }
 .stApp h2, .stApp h3 { font-stretch: 112%; font-weight: 800; letter-spacing: -0.01em; }
 
-.pp-hero { background: #0F5132; color: #F3F6F1; border-radius: 22px; padding: 26px 24px 22px; position: relative; overflow: hidden; }
+.pp-hero { background: #0F5132; color: #F3F6F1; border-radius: 22px; padding: 22px 22px 18px; position: relative; overflow: hidden; }
 .pp-hero::before { content: ""; position: absolute; right: -70px; top: 50%; width: 230px; height: 230px; margin-top: -115px;
   border: 3px solid rgba(243,246,241,.28); border-radius: 50%; }
 .pp-hero::after { content: ""; position: absolute; right: 44px; top: 0; bottom: 0; border-left: 3px solid rgba(243,246,241,.28); }
-.pp-hero h1 { font-family: 'Archivo', sans-serif; font-stretch: 125%; font-weight: 900; font-size: clamp(1.7rem, 6.2vw, 2.7rem);
+.pp-hero h1 { font-family: 'Archivo', sans-serif; font-stretch: 125%; font-weight: 900; font-size: clamp(1.3rem, 5.4vw, 2.2rem);
   line-height: 1.02; letter-spacing: -0.02em; margin: 0 0 10px; padding: 0; color: #F3F6F1; max-width: 13em; position: relative; z-index: 1; }
 .pp-hero p { margin: 0; font-size: .95rem; color: rgba(243,246,241,.86); max-width: 34em; position: relative; z-index: 1; }
 
-/* tabs as pills */
-.stTabs [data-baseweb="tab-list"] { gap: 6px; border-bottom: 0; }
-.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
-.stTabs button[data-baseweb="tab"] { border-radius: 999px; padding: 8px 16px; height: auto; background: #FFFFFF; border: 1.5px solid #D5DDD4; }
-.stTabs button[data-baseweb="tab"] p { font-weight: 700; font-size: .95rem; }
-.stTabs button[data-baseweb="tab"][aria-selected="true"] { background: #14201A; border-color: #14201A; }
-.stTabs button[data-baseweb="tab"][aria-selected="true"] p { color: #FFFFFF; }
-.stTabs button[data-baseweb="tab"]:focus-visible { outline: 3px solid #E0A800; outline-offset: 2px; }
+/* tabs as pills (selectors cover both the current and older Streamlit tab markup) */
+.stTabs [role="tablist"] { gap: 6px; border: 0 !important; box-shadow: none !important; flex-wrap: wrap; }
+.stTabs .react-aria-SelectionIndicator, .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none !important; }
+.stTabs [role="tab"] { border-radius: 999px; padding: 8px 16px; height: auto; background: #FFFFFF; border: 1.5px solid #D5DDD4; margin: 0; }
+.stTabs [role="tab"] p { font-weight: 700; font-size: .95rem; color: #14201A; }
+.stTabs [role="tab"][aria-selected="true"] { background: #14201A; border-color: #14201A; }
+.stTabs [role="tab"][aria-selected="true"] p { color: #FFFFFF; }
+.stTabs [role="tab"]:focus-visible { outline: 3px solid #E0A800; outline-offset: 2px; }
 
 .pp-card { background: #FFFFFF; border: 1.5px solid #DCE3DB; border-radius: 18px; padding: 20px; }
 .pp-score { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; }
@@ -332,7 +332,7 @@ if league != "Premier League":
 
 results, source = get_results(league, use_live, uploaded)
 if results is None:
-    hero.html('<div class="pp pp-hero"><h1>Predict the weekend. Simulate the season.</h1></div>')
+    hero.html('<div class="pp pp-hero"><h1>Predict the weekend.<br>Simulate the season.</h1></div>')
     st.error(f"{league} results could not be downloaded from football-data.co.uk. Try again shortly, or upload a "
              f"results file for this league under Settings (file {LEAGUES[league]['code']}.csv from football-data.co.uk).")
     st.stop()
@@ -348,7 +348,7 @@ zones = ({f"Top {top_n}": (1, int(top_n))} if top_n else {}) | {
     name: (lo if lo > 0 else n_teams + 1 + lo, hi if hi > 0 else n_teams + 1 + hi)
     for name, (lo, hi) in LEAGUES[league]["zones"].items()}
 
-hero.html(f'<div class="pp pp-hero"><h1>Predict the weekend. Simulate the season.</h1>'
+hero.html(f'<div class="pp pp-hero"><h1>Predict the weekend.<br>Simulate the season.</h1>'
           f'<p>{esc(league)} {season}: {len(current)} matches played, {len(fixtures)} to go. '
           f'Results to {results["Date"].max():%-d %B} from {esc(source)}.</p></div>')
 
