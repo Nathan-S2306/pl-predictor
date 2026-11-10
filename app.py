@@ -142,7 +142,8 @@ with tab_match:
     m3.metric(f"{away} win", pct(pr["p_away"]))
     m4, m5, m6 = st.columns(3)
     m4.metric("Expected goals", f"{pr['home_xg']:.2f} – {pr['away_xg']:.2f}")
-    m5.metric("Most likely score", f"{pr['likely_score'][0]}–{pr['likely_score'][1]}", pct(pr["likely_score_p"]), delta_color="off")
+    m5.metric("Predicted score", f"{pr['result_score'][0]}–{pr['result_score'][1]}",
+              pct(float(pr["matrix"][pr["result_score"]])), delta_color="off")
     m6.metric("Over 2.5 goals / both score", f"{pct(pr['p_over_2_5'])} / {pct(pr['p_btts'])}")
 
     left, right = st.columns([3, 2])
@@ -167,8 +168,8 @@ def predict_fixtures(fx: pd.DataFrame) -> pd.DataFrame:
         p = gm.predict(r.HomeTeam, r.AwayTeam)
         rows.append({"Date": r.Date.strftime("%a %d %b") if pd.notna(r.Date) else "TBC",
                      "Home": r.HomeTeam, "Away": r.AwayTeam,
-                     "Predicted": f"{p['likely_score'][0]}–{p['likely_score'][1]}",
-                     "xG": f"{p['home_xg']:.1f} – {p['away_xg']:.1f}",
+                     "Predicted": f"{p['result_score'][0]}–{p['result_score'][1]}",
+                     "Expected goals": f"{p['home_xg']:.1f} – {p['away_xg']:.1f}",
                      "Home win": p["p_home"] * 100, "Draw": p["p_draw"] * 100, "Away win": p["p_away"] * 100})
     return pd.DataFrame(rows)
 
@@ -187,7 +188,28 @@ with tab_next:
     team = st.selectbox("Team", teams, key="fixtures_team")
     mine = fixtures[(fixtures["HomeTeam"] == team) | (fixtures["AwayTeam"] == team)]
     st.dataframe(predict_fixtures(mine), hide_index=True, column_config=PCT_COLS)
-    st.caption("“Predicted” is the single most likely score. Dates show TBC unless they are listed in data/fixtures.csv.")
+    st.caption("“Predicted” is the most likely score for the most likely result. Single predicted scores are always low and "
+               "samey (mostly 1–0 and 2–1), because the likeliest number of goals for a team in any one match is 0, 1 or 2 "
+               "even when it will score and concede plenty over a season. For realistic-looking scores, play the fixtures out below. "
+               "Dates show TBC unless they are listed in data/fixtures.csv.")
+
+    st.subheader(f"Play out {team}'s remaining fixtures")
+    st.caption("One random run drawn from the model's score probabilities. Each run is one possible future, not a forecast; "
+               "the season simulation tab averages thousands of them.")
+    if st.button("Play again"):
+        st.session_state["run"] = st.session_state.get("run", 0) + 1
+    run = st.session_state.get("run", 0)
+    scores = M.sample_scores(gm, mine, seed=1000 * run + teams.index(team))
+    played = pd.DataFrame({"Date": [d.strftime("%a %d %b") if pd.notna(d) else "TBC" for d in mine["Date"]],
+                           "Home": mine["HomeTeam"].to_numpy(), "Score": [f"{h}–{a}" for h, a in scores],
+                           "Away": mine["AwayTeam"].to_numpy()})
+    is_home = (mine["HomeTeam"] == team).to_numpy()
+    gf = sum(h if hm else a for (h, a), hm in zip(scores, is_home))
+    ga = sum(a if hm else h for (h, a), hm in zip(scores, is_home))
+    w = sum((h > a) if hm else (a > h) for (h, a), hm in zip(scores, is_home))
+    d = sum(h == a for h, a in scores)
+    st.markdown(f"**This run:** won {w}, drew {d}, lost {len(scores) - w - d} · scored {gf}, conceded {ga} · {3 * w + d} points from {len(scores)} games")
+    st.dataframe(played, hide_index=True)
 
 # ------------------------------------------------------------- simulation ----
 
@@ -203,14 +225,16 @@ with tab_table:
     k3.metric("Simulated seasons", f"{sim.n_sims:,}")
 
     st.subheader("Projected final table")
-    view = s[["Pos", "Team", "Played", "Pts now", "Exp pts", "Pts low", "Pts high", "Title", top_col, "Relegation"]].copy()
+    view = s[["Pos", "Team", "Played", "Pts now", "Exp pts", "Exp GF", "Exp GA", "Pts low", "Pts high", "Title", top_col, "Relegation"]].copy()
     view["Range"] = view["Pts low"].round().astype(int).astype(str) + "–" + view["Pts high"].round().astype(int).astype(str)
     for c in ("Title", top_col, "Relegation"):
         view[c] = view[c] * 100
-    view = view[["Pos", "Team", "Played", "Pts now", "Exp pts", "Range", "Title", top_col, "Relegation"]]
+    view = view[["Pos", "Team", "Played", "Pts now", "Exp pts", "Range", "Exp GF", "Exp GA", "Title", top_col, "Relegation"]]
     st.dataframe(view, hide_index=True, height=38 * (len(view) + 1),
                  column_config={
                      "Exp pts": st.column_config.NumberColumn("Projected pts", format="%.1f"),
+                     "Exp GF": st.column_config.NumberColumn("Projected GF", format="%.0f", help="Average goals scored over the full season."),
+                     "Exp GA": st.column_config.NumberColumn("Projected GA", format="%.0f", help="Average goals conceded over the full season."),
                      "Range": st.column_config.TextColumn("90% range", help="Nine simulations in ten finish inside this points range."),
                      **{c: st.column_config.ProgressColumn(c, format="%.1f%%", min_value=0, max_value=100)
                         for c in ("Title", top_col, "Relegation")}})

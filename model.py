@@ -159,7 +159,14 @@ class GoalsModel:
         g = np.arange(P.shape[0])
         i, j = np.unravel_index(np.argmax(P), P.shape)
         total = g[:, None] + g[None, :]
+        p_home, p_draw, p_away = float(np.tril(P, -1).sum()), float(np.trace(P)), float(np.triu(P, 1).sum())
+        # Predicted score: the most likely score *within the most likely result*, so a favourite is
+        # shown winning rather than every close game reading 1-1.
+        diff = g[:, None] - g[None, :]
+        mask = diff > 0 if p_home >= max(p_draw, p_away) else diff < 0 if p_away >= p_draw else diff == 0
+        ri, rj = np.unravel_index(np.argmax(np.where(mask, P, -1.0)), P.shape)
         return {
+            "result_score": (int(ri), int(rj)),
             "home": home, "away": away,
             "home_xg": lam, "away_xg": mu,
             "p_home": float(np.tril(P, -1).sum()),
@@ -288,6 +295,21 @@ def fit(results: pd.DataFrame, half_life_days: float = 365.0, prior_sd: float = 
 
 # ---------------------------------------------------------- simulation ----
 
+def sample_scores(model: GoalsModel, fixtures: pd.DataFrame, seed: int | None = None) -> list[tuple[int, int]]:
+    """Draw one random score for each fixture from the model's scoreline probabilities.
+
+    This is a single simulated run: scores vary the way real ones do, but any
+    one run is just one of many possible outcomes.
+    """
+    rng = np.random.default_rng(seed)
+    out = []
+    for h, a in fixtures[["HomeTeam", "AwayTeam"]].itertuples(index=False):
+        P = model.score_matrix(h, a)
+        k = rng.choice(P.size, p=P.ravel())
+        out.append((int(k // P.shape[1]), int(k % P.shape[1])))
+    return out
+
+
 @dataclass
 class SimulationResult:
     teams: list[str]
@@ -340,6 +362,8 @@ def simulate_season(model: GoalsModel, results: pd.DataFrame, fixtures: pd.DataF
     rho = model.rho
 
     pos_counts = np.zeros((n, n))
+    gf_sum = np.zeros(n)
+    ga_sum = np.zeros(n)
     all_pts = np.empty((n_sims, n), dtype=np.int16)
     done = 0
     while done < n_sims:
@@ -376,6 +400,8 @@ def simulate_season(model: GoalsModel, results: pd.DataFrame, fixtures: pd.DataF
         for t in range(n):
             pos_counts[t] += np.bincount(pos[:, t], minlength=n)
         all_pts[done:done + k] = pts
+        gf_sum += gf.sum(0)
+        ga_sum += (gf - gd).sum(0)
         done += k
 
     probs = pos_counts / n_sims
@@ -387,6 +413,8 @@ def simulate_season(model: GoalsModel, results: pd.DataFrame, fixtures: pd.DataF
         "Exp pts": all_pts.mean(0),
         "Pts low": np.percentile(all_pts, 5, axis=0),
         "Pts high": np.percentile(all_pts, 95, axis=0),
+        "Exp GF": gf_sum / n_sims,
+        "Exp GA": ga_sum / n_sims,
         "Avg pos": probs @ np.arange(1, n + 1),
         "Title": probs[:, 0],
         f"Top {top_n}": probs[:, :top_n].sum(1),
