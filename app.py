@@ -19,6 +19,7 @@ DATA = Path(__file__).parent / "data"
 # Changes whenever model.py is edited, so cached models and simulations are rebuilt after an update.
 CODE_VERSION = Path(M.__file__).stat().st_mtime
 LIVE_URL = "https://www.football-data.co.uk/mmz4281/{season}/{code}.csv"
+FIXTURES_URL = "https://www.football-data.co.uk/fixtures.csv"
 
 # Top to bottom of the pyramid. `zones` are the final-position ranges the simulation reports
 # (1-based, inclusive; negative numbers count up from the bottom, so (-3, -1) is the bottom three).
@@ -68,6 +69,28 @@ def load_division(code: str, start_year: int) -> pd.DataFrame:
     frame = M.clean_results(raw.drop(columns=[c for c in raw.columns if c == "Season"]))
     frame["Season"] = f"{start_year}-{(start_year + 1) % 100:02d}"
     return frame
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_upcoming(code: str) -> pd.DataFrame:
+    """Dated upcoming fixtures for one division from football-data.co.uk's fixtures file."""
+    raw = pd.read_csv(FIXTURES_URL, encoding="utf-8-sig", on_bad_lines="skip")
+    raw = raw.rename(columns={c: c.strip() for c in raw.columns})
+    raw = raw[raw["Div"].astype(str).str.strip() == code]
+    out = pd.DataFrame({"Date": pd.to_datetime(raw["Date"].astype(str).str.strip(), dayfirst=True, format="mixed", errors="coerce"),
+                        "HomeTeam": raw["HomeTeam"].astype(str).str.strip(), "AwayTeam": raw["AwayTeam"].astype(str).str.strip()})
+    return out.dropna(subset=["Date"])
+
+
+def get_schedule(league: str, use_live: bool) -> pd.DataFrame:
+    """Bundled fixture dates plus, when live data is on, the upcoming round from football-data.co.uk."""
+    frames = [load_schedule()]
+    if use_live:
+        try:
+            frames.append(load_upcoming(LEAGUES[league]["code"]))
+        except Exception:
+            pass
+    return pd.concat(frames, ignore_index=True)
 
 
 def season_start(today: dt.date) -> int:
@@ -176,7 +199,7 @@ season = M.current_season(results)
 current = results[results["Season"] == season]
 relegated_in = came_down(league, results) if source.startswith("football-data") else ()
 gm = fit_model(results, float(half_life), float(prior_sd), float(promoted), relegated_in, CODE_VERSION)
-fixtures = M.remaining_fixtures(results, load_schedule())
+fixtures = M.remaining_fixtures(results, get_schedule(league, use_live))
 teams = sorted(set(current["HomeTeam"]) | set(current["AwayTeam"]))
 adjust = {t: p for t, p in load_adjustments(league).items() if t in teams}
 n_teams = len(teams)
@@ -206,8 +229,7 @@ with tab_match:
     m3.metric(f"{away} win", pct(pr["p_away"]))
     m4, m5, m6 = st.columns(3)
     m4.metric("Expected goals", f"{pr['home_xg']:.2f} – {pr['away_xg']:.2f}")
-    m5.metric("Predicted score", f"{pr['result_score'][0]}–{pr['result_score'][1]}",
-              pct(float(pr["matrix"][pr["result_score"]])), delta_color="off")
+    m5.metric("Predicted score", f"{pr['result_score'][0]}–{pr['result_score'][1]} ({pct(float(pr['matrix'][pr['result_score']]))})")
     m6.metric("Over 2.5 goals / both score", f"{pct(pr['p_over_2_5'])} / {pct(pr['p_btts'])}")
 
     left, right = st.columns([3, 2])
@@ -247,7 +269,7 @@ with tab_next:
         st.subheader("Next scheduled fixtures")
         st.dataframe(predict_fixtures(dated.head(10)), hide_index=True, column_config=PCT_COLS)
     else:
-        st.info("No dated fixtures are loaded. Add upcoming dates to data/fixtures.csv, or browse by team below.")
+        st.info("Dates for the next round aren't available yet for this league. Pick a team below to see its remaining fixtures.")
     st.subheader("Remaining fixtures by team")
     team = st.selectbox("Team", teams, key="fixtures_team")
     mine = fixtures[(fixtures["HomeTeam"] == team) | (fixtures["AwayTeam"] == team)]
@@ -255,7 +277,7 @@ with tab_next:
     st.caption("“Predicted” is the most likely score for the most likely result. Single predicted scores are always low and "
                "samey (mostly 1–0 and 2–1), because the likeliest number of goals for a team in any one match is 0, 1 or 2 "
                "even when it will score and concede plenty over a season. For realistic-looking scores, play the fixtures out below. "
-               "Dates show TBC unless they are listed in data/fixtures.csv.")
+               "Only the next round has dates; later fixtures show TBC.")
 
     st.subheader(f"Play out {team}'s remaining fixtures")
     st.caption("One random run drawn from the model's score probabilities. Each run is one possible future, not a forecast; "
@@ -284,7 +306,7 @@ with tab_table:
     chance_cols = ["Title", *zones]
     leader = s.iloc[0]
     k1, k2, k3 = st.columns(3)
-    k1.metric("Title favourite", leader["Team"], pct(s["Title"].max()), delta_color="off")
+    k1.metric("Title favourite", f"{leader['Team']} ({pct(s['Title'].max())})")
     k2.metric("Projected winning total", f"{leader['Exp pts']:.0f} pts")
     k3.metric("Simulated seasons", f"{sim.n_sims:,}")
 
@@ -294,7 +316,7 @@ with tab_table:
     for c in chance_cols:
         view[c] = view[c] * 100
     view = view[["Pos", "Team", "Played", "Pts now", "Exp pts", "Range", "Exp GF", "Exp GA", *chance_cols]]
-    st.dataframe(view, hide_index=True, height=38 * (len(view) + 1),
+    st.dataframe(view, hide_index=True, height=35 * (len(view) + 1) + 3,
                  column_config={
                      "Exp pts": st.column_config.NumberColumn("Projected pts", format="%.1f"),
                      "Exp GF": st.column_config.NumberColumn("Projected GF", format="%.0f", help="Average goals scored over the full season."),
@@ -321,7 +343,7 @@ with tab_ratings:
     r = gm.ratings()
     r = r[r["Team"].isin(teams)].reset_index(drop=True)
     r.insert(0, "Rank", range(1, len(r) + 1))
-    st.dataframe(r[["Rank", "Team", "Attack", "Defence"]], hide_index=True, height=38 * (len(r) + 1),
+    st.dataframe(r[["Rank", "Team", "Attack", "Defence"]], hide_index=True, height=35 * (len(r) + 1) + 3,
                  column_config={
                      "Attack": st.column_config.NumberColumn("Attack", format="%.2f", help="Goals scored relative to an average team (1.00). Higher is better."),
                      "Defence": st.column_config.NumberColumn("Defence", format="%.2f", help="Goals conceded relative to an average team (1.00). Lower is better.")})
@@ -338,7 +360,7 @@ with tab_ratings:
 
 with tab_data:
     st.subheader(f"{season} table")
-    st.dataframe(M.league_table(current, points_adjust=adjust).reset_index(), hide_index=True, height=38 * (len(teams) + 1))
+    st.dataframe(M.league_table(current, points_adjust=adjust).reset_index(), hide_index=True, height=35 * (len(teams) + 1) + 3)
     st.subheader("Results used by the model")
     shown = results.sort_values("Date", ascending=False).copy()
     shown["Date"] = shown["Date"].dt.strftime("%Y-%m-%d")
