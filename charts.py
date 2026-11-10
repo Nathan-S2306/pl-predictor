@@ -7,15 +7,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
-SURFACE = "#fcfcfb"
-INK = "#0b0b0b"
-INK_2 = "#52514e"
-MUTED = "#898781"
-GRID = "#e1e0d9"
-BLUE = "#2a78d6"
+SURFACE = "#ffffff"
+INK = "#14201a"
+INK_2 = "#3d4a42"
+MUTED = "#5b6a60"
+GRID = "#e6ece5"
+BLUE = "#0f5132"
 # One hue, light -> dark: probability is a magnitude.
 SEQ = LinearSegmentedColormap.from_list(
-    "seq_blue", [SURFACE, "#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"])
+    "seq_green", [SURFACE, "#dcefe3", "#a3d4b7", "#55a87c", "#1f7a4d", "#0b3d26"])
 
 plt.rcParams.update({
     "font.family": "DejaVu Sans", "font.size": 9, "text.color": INK,
@@ -50,13 +50,13 @@ def scoreline_heatmap(P: np.ndarray, home: str, away: str, max_show: int = 5):
     return fig
 
 
-def position_heatmap(position_probs, label_min: float = 0.05):
+def position_heatmap(position_probs, label_min: float = 0.05, highlight: str | None = None):
     """Chance of each finishing position. Rows are teams (best first), columns are positions."""
     teams = list(position_probs.index)
     M = position_probs.to_numpy()
     n_t, n_p = M.shape
     vmax = float(M.max())
-    fig, ax = plt.subplots(figsize=(9.5, 0.36 * n_t + 1.0))
+    fig, ax = plt.subplots(figsize=(8.2, 0.34 * n_t + 1.0))
     ax.imshow(M, cmap=SEQ, vmin=0, vmax=vmax, aspect="auto")
     for i in range(n_t):
         for j in range(n_p):
@@ -65,6 +65,9 @@ def position_heatmap(position_probs, label_min: float = 0.05):
                 _cell_text(ax, j, i, f"{v * 100:.0f}", v, vmax, size=7.5)
     ax.set_xticks(range(n_p)); ax.set_xticklabels(range(1, n_p + 1))
     ax.set_yticks(range(n_t)); ax.set_yticklabels(teams)
+    for lab in ax.get_yticklabels():
+        if lab.get_text() == highlight:
+            lab.set_fontweight("bold"); lab.set_color(INK)
     ax.xaxis.tick_top(); ax.xaxis.set_label_position("top")
     ax.set_xlabel("Final position (cells show % chance; blank = under 5%)", labelpad=8)
     ax.set_xticks(np.arange(-.5, n_p), minor=True); ax.set_yticks(np.arange(-.5, n_t), minor=True)
