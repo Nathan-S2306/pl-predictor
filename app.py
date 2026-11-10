@@ -174,11 +174,12 @@ CSS = """
   border: 3px solid rgba(243,246,241,.28); border-radius: 50%; }
 .pp-hero::after { content: ""; position: absolute; right: 44px; top: 0; bottom: 0; border-left: 3px solid rgba(243,246,241,.28); }
 .pp-hero h1 { font-family: 'Archivo', sans-serif; font-stretch: 125%; font-weight: 900; font-size: clamp(1.3rem, 5.4vw, 2.2rem);
-  line-height: 1.02; letter-spacing: -0.02em; margin: 0 0 10px; padding: 0; color: #F3F6F1; max-width: 13em; position: relative; z-index: 1; }
+  line-height: 1.02; letter-spacing: -0.02em; margin: 0 0 10px; padding: 0; color: #F3F6F1; position: relative; z-index: 1; }
 .pp-hero p { margin: 0; font-size: .95rem; color: rgba(243,246,241,.86); max-width: 34em; position: relative; z-index: 1; }
 
 /* tabs as pills (selectors cover both the current and older Streamlit tab markup) */
 .stTabs [role="tablist"] { gap: 6px; border: 0 !important; box-shadow: none !important; flex-wrap: wrap; }
+.stTabs [role="tablist"]::before, .stTabs [role="tablist"]::after { display: none !important; }
 .stTabs .react-aria-SelectionIndicator, .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none !important; }
 .stTabs [role="tab"] { border-radius: 999px; padding: 8px 16px; height: auto; background: #FFFFFF; border: 1.5px solid #D5DDD4; margin: 0; }
 .stTabs [role="tab"] p { font-weight: 700; font-size: .95rem; color: #14201A; }
